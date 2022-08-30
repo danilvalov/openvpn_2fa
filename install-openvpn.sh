@@ -1,7 +1,8 @@
 #!/bin/bash
-# installs OpenVPN on Rocky 8 Linux (with 2FA via Google Authenticator)
-# Code taken from this repo: https://github.com/angristan/openvpn-install
-# and adjusted specifically for Rocky 8 (using all default encryption settings)
+# Installs OpenVPN on Amazon Linux 2 (with 2FA via Google Authenticator)
+# Code taken from this repo: https://github.com/danilvalov/openvpn_amazon_linux_2fa
+# and adjusted specifically for Amazon Linux 2 (using all default encryption settings)
+# Authors: Nyr, Stanislas Lange (angristan), Mike Reider (perfecto25), Danil Valov (danilvalov)
 
 SUBNET="10.8.24.0"
 
@@ -18,7 +19,7 @@ function tunAvailable() {
 }
 
 function checkOS() {
-	
+
 	if [[ -e /etc/system-release ]]; then
 		source /etc/os-release
 		if [[ $ID == "fedora" || $ID_LIKE == "fedora" ]]; then
@@ -62,23 +63,23 @@ function installQuestions() {
 	PUBLICIP=$IP
 	IPV6_SUPPORT="n"
 	PORT="1194"
-    PROTOCOL="udp"
+	PROTOCOL="udp"
 	DNS=1
 	COMPRESSION_ENABLED="n"
-    CIPHER="AES-128-GCM"
-    CERT_TYPE="1" # ECDSA
-    CERT_CURVE="prime256v1"
-    CC_CIPHER="TLS-ECDHE-ECDSA-WITH-AES-128-GCM-SHA256"
-    DH_TYPE="1" # ECDH
-    DH_CURVE="prime256v1"
-    HMAC_ALG="SHA256"
-    TLS_SIG="1" # tls-crypt
-    RSA_KEY_SIZE="2048"
+	CIPHER="AES-128-GCM"
+	CERT_TYPE="1" # ECDSA
+	CERT_CURVE="prime256v1"
+	CC_CIPHER="TLS-ECDHE-ECDSA-WITH-AES-128-GCM-SHA256"
+	DH_TYPE="1" # ECDH
+	DH_CURVE="prime256v1"
+	HMAC_ALG="SHA256"
+	TLS_SIG="1" # tls-crypt
+	RSA_KEY_SIZE="2048"
 	DH_KEY_SIZE="2048"
-	
+
 	echo ""
 	echo "Starting OpenVPN configuration based on these default values:"
-    echo -e "\n
+	echo -e "\n
     PUBLICIP=$IP
     IPV6_SUPPORT=$IPV6_SUPPORT
     PORT=$PORT
@@ -97,13 +98,19 @@ function installQuestions() {
     DH_KEY_SIZE=$DH_KEY_SIZE
     \n
     "
-	
+
 	APPROVE_INSTALL=${APPROVE_INSTALL:-n}
 	if [[ $APPROVE_INSTALL =~ n ]]; then
 		read -n1 -r -p "Press any key to continue..."
 	fi
 }
 function installOpenVPN() {
+
+	if [[ ! -e manage-openvpn.sh ]]; then
+		curl -O https://raw.githubusercontent.com/danilvalov/openvpn_amazon_linux_2fa/master/manage-openvpn.sh
+		chmod +x manage-openvpn.sh
+	fi
+
 	if [[ $AUTO_INSTALL == "y" ]]; then
 		# Set default choices so that no questions will be asked.
 		APPROVE_INSTALL=${APPROVE_INSTALL:-y}
@@ -137,18 +144,21 @@ function installOpenVPN() {
 		fi
 	fi
 
-    mkdir -p /etc/openvpn /opt/openvpn/clients /opt/openvpn/google-auth /var/log/openvpn
+	mkdir -p /etc/openvpn /opt/openvpn/clients /opt/openvpn/google-auth /var/log/openvpn
 
 	# If OpenVPN isn't installed yet, install it. This script is more-or-less
 	# idempotent on multiple runs, but will only install OpenVPN from upstream
 	# the first time.
 	if [[ ! -e /etc/openvpn/server.conf ]]; then
-			
-        yum install -y epel-release cmake3 git lz4 lz4-devel lzo-devel google-authenticator qrencode pam-devel pwgen
-        yum -y groupinstall "Development Tools"
-        yum -y copr enable dsommers/openvpn-release
-        yum install -y iptables openssl wget ca-certificates curl tar 'policycoreutils-python*' openvpn
 
+		if [[ $ID == "amzn" ]]; then
+			amazon-linux-extras install epel -y
+		fi
+
+		yum install -y epel-release cmake3 git lz4 lz4-devel lzo-devel qrencode pam-devel pwgen
+		yum -y groupinstall "Development Tools"
+		yum -y copr enable dsommers/openvpn-release
+		yum install -y iptables openssl wget ca-certificates curl tar 'policycoreutils-python*' openvpn
 		# An old version of easy-rsa was available by default in some openvpn packages
 		if [[ -d /etc/openvpn/easy-rsa/ ]]; then
 			rm -rf /etc/openvpn/easy-rsa/
@@ -160,6 +170,21 @@ function installOpenVPN() {
 	else
 		NOGROUP=nobody
 	fi
+	# Install specific version of google-authenticator from sources
+	if [[ ! -e /bin/google-authenticator ]]; then
+		cd ~
+		git clone https://github.com/google/google-authenticator-libpam
+		cd google-authenticator-libpam
+		./bootstrap.sh
+		./configure
+		make && make install
+		cd ~
+		rm -rf ~/google-authenticator-libpam
+		mv /usr/local/bin/google-authenticator /bin/
+		mv /usr/local/lib/security/pam_google_authenticator.la /usr/lib64/security/
+		mv /usr/local/lib/security/pam_google_authenticator.so /usr/lib64/security/
+	fi
+
 	# Install the latest version of easy-rsa from source, if not already installed.
 	if [[ ! -d /etc/openvpn/easy-rsa/ ]]; then
 		local version="3.0.7"
@@ -184,26 +209,26 @@ function installOpenVPN() {
 		SERVER_NAME="server_$(head /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 16 | head -n 1)"
 		echo "$SERVER_NAME" >SERVER_NAME_GENERATED
 		echo "set_var EASYRSA_REQ_CN $SERVER_CN" >>vars
-		
-        # Create the PKI, set up the CA, the DH params and the server certificate
+
+		# Create the PKI, set up the CA, the DH params and the server certificate
 		./easyrsa init-pki
 		./easyrsa --batch build-ca nopass
-        
+
 		./easyrsa build-server-full "$SERVER_NAME" nopass
 		EASYRSA_CRL_DAYS=3650 ./easyrsa gen-crl
 		openvpn --genkey --secret /etc/openvpn/tls-crypt.key
-        
-		
+
+
 	else
 		# If easy-rsa is already installed, grab the generated SERVER_NAME
 		# for client configs
 		cd /etc/openvpn/easy-rsa/ || return
 		SERVER_NAME=$(cat SERVER_NAME_GENERATED)
 	fi
-	
-    # Move all the generated files
+
+	# Move all the generated files
 	cp pki/ca.crt pki/private/ca.key "pki/issued/$SERVER_NAME.crt" "pki/private/$SERVER_NAME.key" /etc/openvpn/easy-rsa/pki/crl.pem /etc/openvpn
-	
+
 	# Make cert revocation list readable for non-root
 	chmod 644 /etc/openvpn/crl.pem
 
@@ -219,6 +244,7 @@ keepalive 10 120 \n
 topology subnet \n
 server ${SUBNET} 255.255.255.0 \n
 ifconfig-pool-persist ipp.txt \n
+plugin /usr/lib64/openvpn/plugins/openvpn-plugin-auth-pam.so \"openvpn login USERNAME password PASSWORD pin OTP\" \n
 push \"redirect-gateway def1 bypass-dhcp\" \n
 ecdh-curve ${DH_CURVE} \n
 tls-crypt tls-crypt.key \n
@@ -237,10 +263,21 @@ ecdh-curve $DH_CURVE \n
 client-config-dir /etc/openvpn/ccd \n
 status /var/log/openvpn/status.log \n
 duplicate-cn \n
-verb 3" >>/etc/openvpn/server.conf
+verb 3 \n" >>/etc/openvpn/server.conf
 
-    # remove empty lines
-    sed -i '/^$/d' /etc/openvpn/server.conf
+	echo -e "# OpenVPN 2FA PAM
+account required pam_unix.so
+auth required pam_unix.so
+auth       substack     password-auth
+auth       include      postlogin
+account    required     pam_sepermit.so
+account    required     pam_nologin.so
+account    include      password-auth
+password   include      password-auth
+auth requisite /usr/lib64/security/pam_google_authenticator.so secret=/opt/openvpn/google-auth/\${USER} user=root authtok_prompt=pin" >> /etc/pam.d/openvpn
+
+	# remove empty lines
+	sed -i '/^$/d' /etc/openvpn/server.conf
 
 	# Create client-config-dir dir
 	mkdir -p /etc/openvpn/ccd
@@ -248,8 +285,8 @@ verb 3" >>/etc/openvpn/server.conf
 	mkdir -p /var/log/openvpn
 	# Enable routing
 	echo "net.ipv4.ip_forward=1" >/etc/sysctl.d/99-openvpn.conf
-    echo "net.ipv6.conf.all.disable_ipv6=1" >/etc/sysctl.d/99-openvpn.conf
-    echo "net.ipv6.conf.default.disable_ipv6=1" >/etc/sysctl.d/99-openvpn.conf
+	echo "net.ipv6.conf.all.disable_ipv6=1" >>/etc/sysctl.d/99-openvpn.conf
+	echo "net.ipv6.conf.default.disable_ipv6=1" >>/etc/sysctl.d/99-openvpn.conf
 
 	# Apply sysctl rules
 	sysctl --system
@@ -262,16 +299,16 @@ verb 3" >>/etc/openvpn/server.conf
 		fi
 	fi
 	# Finally, restart and enable OpenVPN
-	
-    # Don't modify package-provided service
-    cp /lib/systemd/system/openvpn\@.service /etc/systemd/system/openvpn\@.service
-    # Workaround to fix OpenVPN service on OpenVZ
-    sed -i 's|LimitNPROC|#LimitNPROC|' /etc/systemd/system/openvpn\@.service
-    # Another workaround to keep using /etc/openvpn/
-    sed -i 's|/etc/openvpn/server|/etc/openvpn|' /etc/systemd/system/openvpn\@.service
-    systemctl daemon-reload
-    systemctl enable openvpn@server
-    systemctl restart openvpn@server
+
+	# Don't modify package-provided service
+	cp /lib/systemd/system/openvpn\@.service /etc/systemd/system/openvpn\@.service
+	# Workaround to fix OpenVPN service on OpenVZ
+	sed -i 's|LimitNPROC|#LimitNPROC|' /etc/systemd/system/openvpn\@.service
+	# Another workaround to keep using /etc/openvpn/
+	sed -i 's|/etc/openvpn/server|/etc/openvpn|' /etc/systemd/system/openvpn\@.service
+	systemctl daemon-reload
+	systemctl enable openvpn@server
+	systemctl restart openvpn@server
 
 	# Add iptables rules in two scripts
 	mkdir -p /etc/iptables
@@ -282,7 +319,7 @@ verb 3" >>/etc/openvpn/server.conf
     iptables -I FORWARD 1 -i $NIC -o tun0 -j ACCEPT
     iptables -I FORWARD 1 -i tun0 -o $NIC -j ACCEPT
     iptables -I INPUT 1 -i $NIC -p $PROTOCOL --dport $PORT -j ACCEPT" >/etc/iptables/add-openvpn-rules.sh
-	
+
 	# Script to remove rules
 	echo "#!/bin/sh
     iptables -t nat -D POSTROUTING -s ${SUBNET}/24 -o $NIC -j MASQUERADE
@@ -290,7 +327,7 @@ verb 3" >>/etc/openvpn/server.conf
     iptables -D FORWARD -i $NIC -o tun0 -j ACCEPT
     iptables -D FORWARD -i tun0 -o $NIC -j ACCEPT
     iptables -D INPUT -i $NIC -p $PROTOCOL --dport $PORT -j ACCEPT" >/etc/iptables/rm-openvpn-rules.sh
-	
+
 	chmod +x /etc/iptables/add-openvpn-rules.sh
 	chmod +x /etc/iptables/rm-openvpn-rules.sh
 	# Handle the rules via a systemd script
@@ -351,8 +388,8 @@ function removeOpenVPN() {
 		# Get OpenVPN port from the configuration
 		PORT=$(grep '^port ' /etc/openvpn/server.conf | cut -d " " -f 2)
 		PROTOCOL=$(grep '^proto ' /etc/openvpn/server.conf | cut -d " " -f 2)
-		
-        # Stop OpenVPN
+
+		# Stop OpenVPN
 		if [[ $OS =~ (fedora|arch|centos|oracle) ]]; then
 			systemctl disable openvpn@server
 			systemctl stop openvpn@server
@@ -378,14 +415,17 @@ function removeOpenVPN() {
 		fi
 
 		# Cleanup
-		find /home/ -maxdepth 2 -name "*.ovpn" -delete
-		find /root/ -maxdepth 1 -name "*.ovpn" -delete
 		rm -rf /etc/openvpn
+		rm -rf /opt/openvpn
 		rm -rf /usr/share/doc/openvpn*
 		rm -f /etc/sysctl.d/99-openvpn.conf
 		rm -rf /var/log/openvpn
-        yum -y remove openvpn
-		
+		yum -y remove openvpn
+
+		if [[ -e manage-openvpn.sh ]]; then
+			rm -f manage-openvpn.sh
+		fi
+
 		echo "OpenVPN removed!"
 	else
 		echo ""
@@ -395,15 +435,15 @@ function removeOpenVPN() {
 
 function manageMenu() {
 	echo "Welcome to OpenVPN installer!"
-	echo "to add/remove users, use manage.sh script"
+	echo "to add/remove users, use manage-install.sh script"
 	echo ""
 	echo "It looks like OpenVPN is already installed."
 	echo ""
 	echo "What do you want to do?"
 	echo "   1) Remove OpenVPN"
 	echo "   2) Exit"
-	until [[ $MENU_OPTION =~ ^[1-4]$ ]]; do
-		read -rp "Select an option [1-4]: " MENU_OPTION
+	until [[ $MENU_OPTION =~ ^[1-2]$ ]]; do
+		read -rp "Select an option [1-2]: " MENU_OPTION
 	done
 	case $MENU_OPTION in
 	1)

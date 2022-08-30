@@ -3,18 +3,18 @@
 PW=$(pwgen 15 1)
 ACTION=$1
 CLIENT=$2
-HOST=$(hostname)
+ISSUER="OpenVPN"
 CLIENTDIR="/opt/openvpn/clients"
 
-if [ $# -lt 1 ] 
-then 
-    echo -e "usage:\n./manage.sh create/revoke <username>\n./manage.sh status"
+if [ $# -lt 1 ]
+then
+    echo -e "usage:\n./manage-install.sh create/revoke <username>\n./manage-install.sh status"
     exit 1
 fi
 
 
 function newClient() {
-    
+
     CLIENT=$1
 	CLIENTEXISTS=$(tail -n +2 /etc/openvpn/easy-rsa/pki/index.txt | grep -c -E "/CN=$CLIENT\$")
 	if [[ $CLIENTEXISTS == '1' ]]; then
@@ -23,7 +23,7 @@ function newClient() {
 		exit
 	else
 		cd /etc/openvpn/easy-rsa/ || return
-		echo "${PW}"; echo "${PW}" | ./easyrsa build-client-full "${CLIENT}"
+		echo "${PW}" | ./easyrsa build-client-full "${CLIENT}"
 		#./easyrsa build-client-full "$CLIENT"
 		echo "Client $CLIENT added."
 	fi
@@ -66,7 +66,7 @@ function newClient() {
 
 if [ ! "${ACTION}" == "create" ] && [ ! "${ACTION}" == "revoke" ] && [ ! "${ACTION}" == "status" ]
 then
-    echo -e "usage:\n./manage.sh create/revoke <username>\n./manage.sh status"
+    echo -e "usage:\n./manage-openvpn create/revoke <username>\n./manage-openvpn.sh status"
     exit 1
 fi
 
@@ -79,20 +79,20 @@ then
     newClient "${CLIENT}" || { echo "error generating user VPN profile"; exit 1; }
 
     ### setup Google Authenticator
-    google-authenticator -t -d -f -r 3 -R 30 -W -C -s "/opt/openvpn/google-auth/${CLIENT}" || { echo "error generating QR code"; exit 1; }
+    google-authenticator -t -d -f -r 3 -R 30 -W -C -i "${ISSUER}" -l "${CLIENT}" -s "/opt/openvpn/google-auth/${CLIENT}" || { echo "error generating QR code"; exit 1; }
     secret=$(head -n 1 "/opt/openvpn/google-auth/${CLIENT}")
-    qrencode -t PNG -o "/opt/openvpn/google-auth/$CLIENT.png" "otpauth://totp/${CLIENT}@${HOST}?secret=${secret}&issuer=openvpn" || { echo "error generating PNG"; exit 1; }
-        
+    qrencode -t PNG -o "/opt/openvpn/google-auth/$CLIENT.png" "otpauth://totp/${CLIENT}?secret=${secret}&issuer=${ISSUER}" || { echo "error generating PNG"; exit 1; }
+
     ### Email the profile to the user
     hostlist=$(cat /etc/hosts | grep -v "#" | grep -v "localhost" | grep -v "127.0.0.1" | grep -v -e "^$")
-        
+
     content="""
-##########    OpenVPN connection profile (${HOST})  ###################
+##########    OpenVPN connection profile (${ISSUER})  ###################
 
 use the attached VPN profile to connect using Tunnelblick or OpenVPN Connect.
 
-VPN usename: ${CLIENT}
-VPN password:  ${PW}
+VPN username: ${CLIENT}
+VPN password: ${PW}
 
 user attached QR code to register your 2 Factor Authentication with Authy.
 
@@ -103,7 +103,8 @@ If DNS is not working, you can use the /etc/hosts list below to connect to hosts
 ----------------------------------------
 ${hostlist}
     """
-    echo "${content}" | mailx -s "Your OpenVPN profile" -a "${CLIENTDIR}/${CLIENT}/${CLIENT}.ovpn" -a "/opt/openvpn/google-auth/${CLIENT}.png" -r "Devops<devops@company.com>" ${CLIENT}@company.com || { echo "error mailing profile to client"; exit 1; }
+    echo "${content}"
+#    echo "${content}" | mailx -s "Your OpenVPN profile" -a "${CLIENTDIR}/${CLIENT}/${CLIENT}.ovpn" -a "/opt/openvpn/google-auth/${CLIENT}.png" -r "Devops<devops@company.com>" ${CLIENT}@company.com || { echo "error mailing profile to client"; exit 1; }
 fi
 
 
@@ -123,11 +124,13 @@ then
     cp /etc/openvpn/easy-rsa/pki/crl.pem /etc/openvpn/crl.pem
     chmod 644 /etc/openvpn/crl.pem
     rm -rf "${CLIENTDIR:?}/${CLIENT}"
+    rm -rf "/opt/openvpn/google-auth/${CLIENT}"
+    rm -rf "/opt/openvpn/google-auth/${CLIENT}.png"
 
     # remove client from PKI index
     echo "$(grep -v "CN=${CLIENT}$" pki/index.txt)" >pki/index.txt
 
-    # remove system acct that was created by OpenVPN manage.sh script
+    # remove system acct that was created by OpenVPN manage-install.sh script
     user_exists=$(grep $CLIENT /etc/passwd | grep openvpn | grep nologin | grep -v "^openvpn:" | wc -l)
     if [ $user_exists -eq 1 ]
     then
